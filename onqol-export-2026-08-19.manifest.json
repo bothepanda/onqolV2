@@ -1,0 +1,17 @@
+{
+  "schema_version": "1.0.0",
+  "created_at": "2026-08-19T11:30:54.692Z",
+  "archive": "onqol-export-2026-08-19.zip",
+  "sha256": "6743eb7f328f9b37d4c60489b309f52a1aa68a18897fbbe18c3a9648a1b01b7e",
+  "entries": 205,
+  "allowed_env_example_included": true,
+  "forbidden_entries": [],
+  "verified_absent": [
+    "secrets and non-example .env files",
+    ".git and worktrees",
+    "node_modules",
+    "dist and coverage",
+    "nested archives",
+    "local editor, agent and OS artifacts"
+  ]
+}
