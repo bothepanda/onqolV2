@@ -425,6 +425,7 @@ export default function V25Trainer({ mentor = true }) {
     accessGranted: false,
     routerModel: "gpt-5.6-luna",
     simulatorModel: "gpt-5.6-terra",
+    mentorModel: "gpt-5.6-terra",
   });
   const [accessToken, setAccessToken] = useState(
     () => sessionStorage.getItem(MAIN_ACCESS_TOKEN_KEY) || ""

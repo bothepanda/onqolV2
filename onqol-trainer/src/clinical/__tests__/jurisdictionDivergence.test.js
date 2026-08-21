@@ -65,13 +65,13 @@ test("the jurisdiction constraint reaches the mentor's hard bounds", () => {
   const { brief } = caseAndBrief();
   const bounds = mentorHardBounds(brief);
 
-  assert.match(bounds, /LOCAL FORMULARY DOSE IS NOT AN ERROR/i);
+  assert.match(bounds, /local formulary dose is not automatically wrong/i);
   assert.match(bounds, /do not correct it/i);
-  assert.match(bounds, /debrief material, never a live correction/i);
+  assert.match(bounds, /debrief, never as a live correction/i);
 
   // And it survives into the assembled prompt, not just the helper.
   const prompt = buildMentorPrompt({ brief, learnerText: LOCAL_ORDER, locale: "ru" });
-  assert.match(prompt.system, /LOCAL FORMULARY DOSE IS NOT AN ERROR/i);
+  assert.match(prompt.system, /local formulary dose is not automatically wrong/i);
 });
 
 test("the rule is registered with the same signatures as the doses it guards", () => {

@@ -33,6 +33,7 @@ for (const [i, input] of turns.entries()) {
   });
   session = result.session;
   console.log(`\n──── ХОД ${i + 1} ── ${input.slice(0, 70)}`);
+  console.log("  attempted:", (result.performedIds || []).join(", ") || "—", "| blocked:", (result.blockedOperations||[]).map(o=>o.action_id).join(", ")||"—");
   console.log("  completedActions:", (session.completedActions || []).join(", ") || "—");
   const issues = brief?.candidateIssues || [];
   console.log("  candidate_issues:", issues.length ? issues.map((x) => `${x.issue_id}[sev${x.severity}]`).join(", ") : "— пусто —");

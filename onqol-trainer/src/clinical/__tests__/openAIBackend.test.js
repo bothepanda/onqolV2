@@ -93,6 +93,8 @@ test("OpenAI mentor schema carries intervention mode and selected issue", () => 
     task: "mentor",
     prompt: { system: "mentor", user: "{}" },
   });
+  assert.equal(request.model, "gpt-5.6-terra");
+  assert.equal(request.reasoning.effort, "high");
   const schema = request.text.format.schema;
   assert.deepEqual(schema.properties.mode.enum, [
     "CONTINUE",
@@ -105,7 +107,9 @@ test("OpenAI mentor schema carries intervention mode and selected issue", () => 
   assert.deepEqual(schema.properties.issue_id.type, ["string", "null"]);
   assert.ok(schema.required.includes("mode"));
   assert.ok(schema.required.includes("issue_id"));
-  assert.ok(schema.required.includes("question_domain"));
+  assert.deepEqual(schema.required, ["mode", "issue_id", "mentor_text", "anchor_quote"]);
+  assert.equal(Object.hasOwn(schema.properties, "question_domain"), false);
+  assert.equal(Object.hasOwn(schema.properties, "factual_claims"), false);
 });
 
 test("OpenAI raw response text is collected from message output items", () => {

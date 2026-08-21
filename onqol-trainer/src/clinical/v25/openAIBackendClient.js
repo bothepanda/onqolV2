@@ -18,7 +18,7 @@ export async function getOpenAIBackendStatus(options = {}) {
       provider: "openai",
       routerModel: "gpt-5.6-luna",
       simulatorModel: "gpt-5.6-terra",
-      mentorModel: "gpt-5.6-luna",
+      mentorModel: "gpt-5.6-terra",
       gatewayVersion: null,
       schemas: null,
     };

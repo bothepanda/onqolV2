@@ -95,7 +95,7 @@ test("a gendered past tense with no pronoun is detected, patient description is 
   }
 });
 
-test("the neutral instruction offers rewrites, not only a ban", () => {
+test("the lean neutral instruction gives an actionable register", () => {
   const caseData = replayCase();
   const prompt = buildMentorPrompt({
     brief: buildMentorBrief({
@@ -106,14 +106,9 @@ test("the neutral instruction offers rewrites, not only a ban", () => {
     }),
     learnerText: "дальше?",
   });
-  // The rule has to name the pronoun-less form, which is the one the model used.
-  assert.match(prompt.system, /Dropping the pronoun is not a way around this rule/);
-  // 21.08.2026: the neutral branch used to teach the passive as the way out
-  // ("назначение записано"), and the live run duly answered in it. It now
-  // forbids the passive by name and offers second-person present tense instead.
-  assert.match(prompt.system, /THE PASSIVE VOICE IS FORBIDDEN/);
-  assert.match(prompt.system, /IMPERATIVE freely/);
-  assert.match(prompt.system, /аппендицит из дифференциала ты не выкидываешь/);
+  assert.match(prompt.system, /Use second-person present tense or imperatives/);
+  assert.match(prompt.system, /avoid gendered past tense/);
+  assert.match(prompt.system, /bureaucratic passive voice/);
   assert.doesNotMatch(prompt.system, /write "назначение записано"/);
 });
 
@@ -148,8 +143,8 @@ test("the form the resident used about herself reaches the next turn's prompt", 
   });
   assert.equal(brief.learnerAddressForm, LEARNER_ADDRESS_FORM.FEMININE);
   const prompt = buildMentorPrompt({ brief, learnerText: "дальше?" });
-  assert.match(prompt.system, /address form is feminine/);
-  assert.equal(JSON.parse(prompt.user).brief.learner_address_form, "feminine");
+  assert.match(prompt.system, /learner in the feminine form/);
+  assert.equal(JSON.parse(prompt.user).learner_address_form, "feminine");
 });
 
 // --- 2. how much engine text one line of orders produces --------------------

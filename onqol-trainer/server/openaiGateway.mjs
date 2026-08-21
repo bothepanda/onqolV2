@@ -6,19 +6,18 @@ import {
 
 export const OPENAI_GATEWAY_VERSION = "2026-08-13.1";
 const SIMULATOR_SCHEMA_VERSION = "simulator-envelope-v3";
-// v4: the model chooses mode, issue and scaffolding; the schema gained
-// scaffolding_level because the length limit depends on it.
-const MENTOR_SCHEMA_VERSION = "mentor-full-context-v5";
+// v4.1: the model chooses a bounded issue and returns only the transport fields
+// needed by the live mentor. Scaffolding and question contracts remain owned by
+// the deterministic policy shadow.
+const MENTOR_SCHEMA_VERSION = "mentor-minimal-context-v4.1";
 
 const DEFAULT_MODELS = Object.freeze({
   router: "gpt-5.6-luna",
   simulator: "gpt-5.6-terra",
-  // Clinical truth stays deterministic; the mentor now chooses whether and how
-  // to intervene from the full case context, which is the one call per turn
-  // worth spending a strong model on. Overridable with OPENAI_MENTOR_MODEL -
-  // the model choice and the cost of high effort are a product decision, not a
-  // code one (CDR, base rules v2).
-  mentor: "gpt-5.6-luna",
+  // V4.1 quality experiment: Terra gets the lean prompt and learner-visible
+  // envelope. Clinical truth stays deterministic. OPENAI_MENTOR_MODEL remains
+  // the deployment override and the rollback baseline uses Luna.
+  mentor: "gpt-5.6-terra",
 });
 
 const TASKS = Object.freeze({
@@ -80,20 +79,12 @@ const TASKS = Object.freeze({
     },
   },
   mentor: {
-    // Base rules v2. The old budget (600) matched a mentor that only rendered a
-    // decision someone else had taken. The mentor now reads the case card, the
-    // whole transcript and the approved rules, decides whether and how to
-    // intervene, and at scaffolding 3-4 the specification asks it for options or
-    // an explanation. Output length is still capped where it matters - in
-    // mentorAgent's post-check, by mode - so this budget buys reasoning, not
-    // lecturing.
-    // Raised from 1600 on 21.08.2026. In the Responses API reasoning tokens are
-    // charged to this budget, and the specification grew by a third when the
-    // voice reference and the new archetypes landed. Two turns of the live run
-    // came back with no message content at all - the model was still reasoning
-    // when the cap hit - which surfaced as "mentor_agent_error" and cost the
-    // learner the intervention. The output itself is capped by mode in
-    // mentorAgent's post-check, so this budget only buys reasoning headroom.
+    // The mentor reads a minimal learner-visible envelope plus bounded current
+    // issues and approved rules. Output length is capped in mentorAgent's
+    // post-check, by mode, so this budget buys reasoning rather than lecturing.
+    // In the Responses API reasoning tokens share this budget. The prompt is
+    // lean, but the output itself is still capped by mode in mentorAgent, so
+    // this limit preserves reasoning headroom without permitting a lecture.
     maxOutputTokens: 4000,
     // One call per turn, and it is the call that decides what the learner is
     // taught. Low effort was affordable when the decision was already made.
@@ -122,30 +113,8 @@ const TASKS = Object.freeze({
           // the learner cannot trace to their own words is what the wording ban
           // failed to stop. See anchorQuoteMatches in core/mentorAgent.js.
           anchor_quote: { type: ["string", "null"] },
-          question_domain: { type: ["string", "null"] },
-          scaffolding_level: { type: ["integer", "null"] },
-          factual_claims: {
-            type: "array",
-            items: {
-              type: "object",
-              properties: {
-                source_id: { type: "string" },
-                text: { type: "string" },
-              },
-              required: ["source_id", "text"],
-              additionalProperties: false,
-            },
-          },
         },
-        required: [
-          "mode",
-          "issue_id",
-          "mentor_text",
-          "anchor_quote",
-          "factual_claims",
-          "question_domain",
-          "scaffolding_level",
-        ],
+        required: ["mode", "issue_id", "mentor_text", "anchor_quote"],
         additionalProperties: false,
       },
     },

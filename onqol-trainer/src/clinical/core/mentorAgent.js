@@ -1,6 +1,6 @@
 import { renderMentorBrief } from "./mentorBrief.js";
 import { MENTOR_MODE } from "./mentorPolicy.js";
-import { MENTOR_BEHAVIOR_SPEC, MENTOR_BEHAVIOR_SPEC_SOURCE } from "./mentorBehaviorSpec.js";
+import { MENTOR_BEHAVIOR_SPEC } from "./mentorBehaviorSpec.js";
 import {
   LEARNER_ADDRESS_FORM,
   detectGenderedAddress,
@@ -21,11 +21,11 @@ import {
  * learner had already done, so it narrated the screen back and praised in the
  * abstract. Replay 91ba7206 died of that.
  *
- * It is now "a strong model with the full context chooses among bounded
- * current issues and speaks,
- * deterministic post-checks judge the output, one repair, and only then a
- * template". Safety did not move: it moved to the *output*, which is the only
- * place it was ever actually enforceable.
+ * It is now "a strong model with a minimal learner-visible context chooses
+ * among bounded current issues and speaks; deterministic post-checks judge the
+ * output; clinical-boundary failures receive one repair, while structural
+ * failures use the controlled fallback immediately". Safety did not move: it
+ * remains enforced at the output and execution boundaries.
  *
  * What still binds the mentor, checked after generation:
  *   1. the world is deterministic       - leaksUnrevealedFinding
@@ -95,18 +95,12 @@ export { LEARNER_ADDRESS_FORM, detectGenderedAddress, resolveLearnerAddressForm 
 
 function addressInstruction(form) {
   if (form === LEARNER_ADDRESS_FORM.FEMININE) {
-    return "GRAMMATICAL GENDER. The learner's address form is feminine (from the session setting or from her own past-tense forms). Use feminine forms about her: \"ты сказала\", \"ты была права\". Never switch to masculine.";
+    return "Address the learner in the feminine form and never switch to masculine forms.";
   }
   if (form === LEARNER_ADDRESS_FORM.MASCULINE) {
-    return "GRAMMATICAL GENDER. The learner's address form is masculine (from the session setting or from his own past-tense forms). Use masculine forms about him: \"ты сказал\", \"ты был прав\". Never switch to feminine.";
+    return "Address the learner in the masculine form and never switch to feminine forms.";
   }
-  return [
-    "GRAMMATICAL GENDER. The learner's gender is not established, so do not assign one. Avoid gendered past tense and short adjectives about the learner - and note that Russian drops the subject, so \"хорошо, что сохранил\" assigns a gender exactly as \"ты сохранил\" does. Dropping the pronoun is not a way around this rule.",
-    "Stay in the SECOND PERSON and the PRESENT TENSE, and use the IMPERATIVE freely. \"ты зовёшь старшего\", \"ты держишь аппендицит в дифференциале\", \"назови дозу\", \"смотри на диурез\", \"считай сам\". Imperatives and present-tense verbs carry no gender at all in Russian, and they are how a surgeon actually speaks on a shift.",
-    "THE PASSIVE VOICE IS FORBIDDEN as a way around gender, and this is the most important line in this block. \"Рабочая гипотеза сформулирована\", \"подготовка к операции зафиксирована\", \"назначение записано\", \"вызов старшего — зрелое решение\" are all grammatically correct and all sound like a clerk filling in a form. That register is the single worst defect this mentor has ever had. If a sentence only works in the passive, throw it away and write a question or an instruction instead.",
-    "Instead of \"хорошо, что сохранил аппендицит как рабочую гипотезу\" write \"аппендицит из дифференциала ты не выкидываешь — правильно\". Instead of \"ты не сузил дифференциал\" write \"дифференциал у тебя всё ещё широкий\". Instead of \"ты назначил физраствор\" write \"ты льёшь физраствор — сколько и за какое время?\". The same applies to Kazakh.",
-    "PAST TENSE IS NOT THE ONLY TRAP. \"сам\", \"одна\", \"готов\", \"уверена\", \"должен\" all assign a gender in the present tense: \"теперь сам определяй тактику\" is as gendered as \"ты определил\". Drop the word - \"теперь определяй тактику\" says the same thing. The voice reference in section 19.1 of the specification is quoted in the masculine because that is how it was recorded; re-cast every line of it to whatever the learner's address form says, and to neutral when it says nothing.",
-  ].join("\n");
+  return "The learner's gender is not established. Use second-person present tense or imperatives; avoid gendered past tense, gendered adjectives, and bureaucratic passive voice.";
 }
 
 function parseJsonPayload(payload) {
@@ -421,13 +415,26 @@ export function validateMentorPayload(payload, brief, caseData, revealedFindingI
   if (!mode) return { ok: false, reason: "invalid_mode", telemetry };
   const text = String(payload?.mentor_text || "").trim();
   const policy = brief.mentorPolicy || null;
+  const candidateIssues = brief.candidateIssues || [];
+  const issueIds = new Set(candidateIssues.map((issue) => issue.issue_id));
+  const selectedPayloadIssue = candidateIssues.find(
+    (issue) => issue.issue_id === payload?.issue_id
+  ) || null;
+  const selectedScaffolding =
+    selectedPayloadIssue && selectedPayloadIssue.issue_id !== policy?.issue_id
+      ? selectedPayloadIssue.hint_level
+      : policy?.scaffolding_level;
 
   // Shadow comparison only. The regex policy no longer dictates the turn.
   if (policy && mode !== policy.mode) telemetry.push("policy_mode_divergence");
   if (policy && (payload?.issue_id || null) !== (policy.issue_id || null)) {
     telemetry.push("policy_issue_divergence");
   }
-  if (policy && (payload?.question_domain || null) !== (policy.question_domain || null)) {
+  if (
+    policy &&
+    Object.hasOwn(payload || {}, "question_domain") &&
+    (payload?.question_domain || null) !== (policy.question_domain || null)
+  ) {
     telemetry.push("policy_question_domain_divergence");
   }
 
@@ -436,7 +443,10 @@ export function validateMentorPayload(payload, brief, caseData, revealedFindingI
     if (payload?.issue_id) return { ok: false, reason: "continue_mode_has_issue", telemetry };
   } else {
     const base = validateMentorText(text, caseData, revealedFindingIds, {
-      maxChars: maxMentorChars({ mode, scaffoldingLevel: payload?.scaffolding_level }),
+      maxChars: maxMentorChars({
+        mode,
+        scaffoldingLevel: payload?.scaffolding_level ?? selectedScaffolding ?? 0,
+      }),
     });
     telemetry.push(...(base.telemetry || []));
     if (!base.ok) return { ...base, telemetry };
@@ -449,10 +459,11 @@ export function validateMentorPayload(payload, brief, caseData, revealedFindingI
     if (echo.paraphrased) telemetry.push("echoes_engine_sentence");
   }
 
-  const candidateIssues = brief.candidateIssues || [];
-  const issueIds = new Set(candidateIssues.map((issue) => issue.issue_id));
+  // v4.1 permits a speaking reply with no issue. It is allowed, not free: the
+  // turn closes no heuristic and leaves no expectation for the next one, so the
+  // A/B report has to be able to count how often the mentor works off-brief.
   if (mode !== MENTOR_MODE.CONTINUE && !payload?.issue_id) {
-    return { ok: false, reason: "mentor_issue_required", telemetry };
+    telemetry.push("intervention_without_issue");
   }
   if (payload?.issue_id && !issueIds.has(payload.issue_id)) {
     // The model remains free to choose among current issues and to phrase the
@@ -460,10 +471,6 @@ export function validateMentorPayload(payload, brief, caseData, revealedFindingI
     // the deterministic brief cannot review or close on the next turn.
     return { ok: false, reason: "issue_not_in_brief", telemetry };
   }
-  const selectedPayloadIssue = candidateIssues.find(
-    (issue) => issue.issue_id === payload?.issue_id
-  ) || null;
-
   // A standing risk at an authored irreversible gate is advisory, not a
   // SAFETY_STOP, but it is not optional. CONTINUE or a different issue would
   // consume the held action without returning the promised decision.
@@ -557,26 +564,50 @@ export function validateMentorPayload(payload, brief, caseData, revealedFindingI
   // what made the mentor sound like a printer. Numbers are the exception below.
   // Same filter as allowedNumberSources: a rule that is in the brief but not
   // approved for teaching is not a source, whatever the brief calls it.
-  const allowedSourceIds = new Set(allowedNumberSources(brief).map((source) => source.source_id));
+  const allowedSources = allowedNumberSources(brief);
+  const allowedSourceIds = new Set(allowedSources.map((source) => source.source_id));
   const declaredClaims = Array.isArray(payload?.factual_claims) ? payload.factual_claims : [];
   for (const claim of declaredClaims) {
     if (!allowedSourceIds.has(claim?.source_id)) {
       return { ok: false, reason: "fact_source_not_allowed", claimSourceId: claim?.source_id, telemetry };
-    } else if (!normaliseFactText(text).includes(normaliseFactText(claim?.text))) {
-      // Paraphrase is fine for a fact already on the learner's screen. It is
-      // not fine for an approved rule: that is how a rule gets misquoted under
-      // the reviewers' name.
-      if (isRuleSource(claim.source_id)) {
+    }
+    const source = allowedSources.find((candidate) => candidate.source_id === claim.source_id);
+    const claimText = normaliseFactText(claim?.text);
+    const replyIncludesClaim = normaliseFactText(text).includes(claimText);
+    if (isRuleSource(claim.source_id)) {
+      const sourceIncludesClaim = normaliseFactText(source?.text).includes(claimText);
+      if (!claimText || !sourceIncludesClaim || !replyIncludesClaim) {
         return { ok: false, reason: "rule_claim_not_quoted", claimSourceId: claim.source_id, telemetry };
       }
+    } else if (!replyIncludesClaim) {
       telemetry.push("declared_fact_missing_from_reply");
     }
   }
 
+  const scopedRuleIds = new Set([
+    ...(selectedPayloadIssue?.clinical_rule_ids || []),
+    ...(policy?.allowed_clinical_rule_ids || []),
+  ]);
+  const scopedRuleSources = allowedSources.filter((source) => {
+    if (!isRuleSource(source.source_id)) return false;
+    const ruleId = String(source.source_id).replace(/^(?:clinical_rule|dosing_rule)\./u, "");
+    return scopedRuleIds.has(ruleId);
+  });
+  const exactScopedRuleInReply = scopedRuleSources.some((source) => {
+    const sourceText = normaliseFactText(source.text);
+    return Boolean(sourceText) && normaliseFactText(text).includes(sourceText);
+  });
+  const declaredScopedRuleInReply = declaredClaims.some((claim) => {
+    if (!isRuleSource(claim?.source_id) || !allowedSourceIds.has(claim.source_id)) return false;
+    const ruleId = String(claim.source_id).replace(/^(?:clinical_rule|dosing_rule)\./u, "");
+    return scopedRuleIds.has(ruleId);
+  });
+
   // An appeal to authority has to name the authority it is appealing to.
   if (
     RULE_CITATION_RE.test(text) &&
-    !declaredClaims.some((claim) => isRuleSource(claim?.source_id) && allowedSourceIds.has(claim?.source_id))
+    !exactScopedRuleInReply &&
+    !declaredScopedRuleInReply
   ) {
     return { ok: false, reason: "unsourced_rule_citation", telemetry };
   }
@@ -586,16 +617,7 @@ export function validateMentorPayload(payload, brief, caseData, revealedFindingI
   // the selected issue. Without one, the mentor can challenge the reasoning or
   // ask a question, but it cannot invent the expected treatment.
   if (containsDirectClinicalRecommendation(text)) {
-    const scopedRuleIds = new Set([
-      ...(selectedPayloadIssue?.clinical_rule_ids || []),
-      ...(policy?.allowed_clinical_rule_ids || []),
-    ]);
-    const hasScopedRuleClaim = declaredClaims.some((claim) => {
-      if (!isRuleSource(claim?.source_id) || !allowedSourceIds.has(claim.source_id)) return false;
-      const ruleId = String(claim.source_id).replace(/^(?:clinical_rule|dosing_rule)\./u, "");
-      return scopedRuleIds.has(ruleId);
-    });
-    if (!hasScopedRuleClaim) {
+    if (!exactScopedRuleInReply && !declaredScopedRuleInReply) {
       return { ok: false, reason: "unsupported_clinical_recommendation", telemetry };
     }
   }
@@ -618,37 +640,24 @@ export function validateMentorPayload(payload, brief, caseData, revealedFindingI
 /** The short, non-negotiable block that follows the specification. */
 export function mentorHardBounds(brief) {
   return [
-    "=== HARD BOUNDS (these override anything in the specification above) ===",
-    "",
-    "1. THE WORLD IS DETERMINISTIC. Findings, values, timing and progression exist only in the case card you were given. Never state a finding that is not in revealed_findings, and never announce a result the learner has not obtained. The case card's unrevealed_findings section is marked do_not_mention: it is there so you know what this case does and does not model, NOT so you can tell the learner. Saying honestly what the case does not simulate is allowed and useful; hinting at what an unperformed test would show is not.",
-    "2. NUMBERS COME FROM THE KNOWLEDGE BASE. Every digit in your reply must already appear in a revealed fact, an approved clinical or dosing rule, or the learner's own words. If the base has no number - a dose, a threshold, an interval - discuss it without the number and send the learner to the local formulary. Never take a number from your own memory, not even one you are sure of.",
-    "3. NO DIAGNOSTIC CONFIRMATION BEFORE THE DEBRIEF. You may say a hypothesis explains the picture. You may not say the diagnosis is correct, that the learner is right about it, or what the patient definitely has.",
-    "4. QUESTIONS. CONTINUE carries no text at all. Outside TEACH, ask at most one question - a resident answering three questions at once answers none of them properly. In TEACH you may lay out a short numbered set of questions once the learner is genuinely stuck, because that is what a senior does at a whiteboard; do not make a habit of it.",
-    "5. A LOCAL FORMULARY DOSE IS NOT AN ERROR. The approved dosing rules you hold are international reference rules. Kazakhstan's national formulary and clinical protocol give different figures for some of the same drugs, and the learner was trained on those. When a learner states a dose that differs from your rule, do not correct it, do not substitute the number from your rule, and do not call the answer wrong. Divergence between a local and a reference source is debrief material, never a live correction.",
-    "6. AN ORDINARY MISSING RULE IS NOT A SAFETY STOP. When mentor_policy says governance_stop without safety_critical, the pilot simply holds no reviewed rule for what the learner ordered. The order is recorded and is not applied to the patient - but that is a gap in the training content, not danger and not a mistake by the learner. Do not say \"стоп\", \"не прошли проверку\" or \"не валидировано\" about it, and do not ask the learner to revise the parameter: there is no rule to revise it against. Say plainly that the effect is not modelled here, and move the case on. If safety_critical is true, keep SAFETY_STOP: either a reviewed safety rule rejected the parameter or it belongs to an explicitly enumerated high-risk class that fails safe while review is pending.",
-    "",
-    "7. DO NOT SAY WHAT THE ENGINE ALREADY SAID. The exact text printed above your reply this turn is in engine_reply_this_turn. Explaining the simulator to the learner - that a parameter has no reviewed rule, that an effect is not modelled, that an order was recorded but not applied - is the ENGINE'S job and it has already done it. Restating it in your own words spends your whole turn on housekeeping. You get one intervention per turn: spend it on the learner's reasoning. Concretely: if engine_reply_this_turn already told the learner that something is not modelled, has no reviewed rule, or was recorded without being applied, you may not say that too - your reply is rejected for it. Answering a learner who ASKS about the limits of the case is still allowed and still useful; echoing the engine unprompted is not.",
-    "8. DO NOT ASK A THIRD TIME. brief.probing_streak is how many turns running you have been asking instead of teaching, and brief.your_recent_questions is what you asked, verbatim. At a streak of 2, a third CLARIFY or CHALLENGE question is REJECTED - the learner is not going to answer it, and asking again in new words is the single most frustrating thing a supervisor does. Switch: TEACH it at a higher scaffolding level - break the question into the two smaller ones it was hiding, or supply the reasoning and ask them to apply it - or accept it, say plainly that it stays open for the debrief, and move the patient on. Rephrasing is not switching. TEACH is exempt from this rule precisely because breaking the question down is the way out of it.",
-    "9. STANDING RISKS DO NOT EXPIRE. A candidate issue with lifecycle=standing_risk remains clinically relevant while its condition is open. At standing_risk_stage=irreversible_gate, name the open risk directly using only fallback_text and approved content, then return one decision to the learner. Do not turn it into a checklist, do not repeat it after the gate intervention, and do not invent a safety stop when safety_critical is false.",
-    "10. CHOOSE CONTENT; DO NOT CREATE IT. A speaking reply must select exactly one issue_id from candidate_issues. You remain free to phrase it naturally and to choose the best current candidate, but you may not invent a new clinical issue. A direct treatment or operative recommendation requires a rule explicitly attached to that candidate in clinical_rule_ids and quoted through factual_claims. Without one, ask about the reasoning instead of announcing the expected treatment.",
-    "",
-    "WHAT ALREADY HAPPENED. The application prints the patient and environment response ABOVE your reply. Everything in just_performed has been carried out this turn and its results are already on the learner's screen. Never instruct the learner to start something already done, and do not open by narrating the screen back at them.",
-    "THE LEARNER'S CLAIMS ARE NOT FACTS. accumulated_reasoning_state and the transcript contain what the learner said. Quoting it back is good supervision; treating it as established patient truth is not. The learner calling the patient stable does not make her stable.",
-    "",
+    "## TURN-SPECIFIC RUNTIME CONTRACT",
+    "These lines describe this turn and do not add patient facts.",
+    "- The engine reply is already visible above the mentor. Do not repeat its housekeeping or instruct the learner to perform an action listed in deterministic_policy_shadow.just_performed.",
+    "- candidate_issues supplies possible teaching targets, not patient truth. Prefer one relevant issue_id; use null rather than inventing one when none fits.",
+    "- Every clinical number or direct recommendation must already exist in revealed_facts, the learner's current words, or an approved rule attached to the selected issue.",
+    "- Kazakhstan jurisdiction: a learner-stated local formulary dose is not automatically wrong. Do not correct it without an explicit safety flag or approved rule; keep source divergence for the debrief, never as a live correction.",
+    "- At probing_streak 2, do not ask another CLARIFY or CHALLENGE question. Use TEACH or move on.",
+    "- A standing risk at irreversible_gate must be addressed before CONTINUE. SAFETY_STOP still requires an explicit safety-critical signal.",
     addressInstruction(brief.learnerAddressForm || LEARNER_ADDRESS_FORM.NEUTRAL),
-    "",
     `Speak ${brief.locale === "kk" ? "Kazakh" : "Russian"} unless the locale field says otherwise. Address the learner informally, as a senior colleague would.`,
-    `Length limit: ${MAX_MENTOR_CHARS} characters, or ${MAX_MENTOR_CHARS_TEACHING} for TEACH at scaffolding ${TEACHING_SCAFFOLDING_THRESHOLD} or above.`,
-    "REINFORCE REQUIRES AN ANCHOR. When you choose REINFORCE, anchor_quote must be a short, VERBATIM fragment of what the learner wrote THIS turn - the words you are reinforcing, copied exactly. If nothing they wrote this turn is worth quoting back, there is nothing to reinforce: choose CONTINUE, or ask. Praise that does not name the learner's own move is worthless to them.",
-    "Return strict JSON only: mode, issue_id (or null), mentor_text, anchor_quote (or null), factual_claims, question_domain, scaffolding_level.",
+    "For REINFORCE, anchor_quote must be a short exact substring of the learner's current message.",
+    "Return strict JSON only: mode, mentor_text, issue_id (or null), anchor_quote (or null).",
   ].join("\n");
 }
 
 export function buildMentorPrompt({ brief, learnerText, locale = "ru", repair = null }) {
   return {
     system: [
-      `You are the ON QOL Clinical Mentor. The behaviour contract below is ${MENTOR_BEHAVIOR_SPEC_SOURCE}, reproduced verbatim. Follow it. You decide whether to intervene, which supplied candidate issue matters most, which mode to use and how much scaffolding to give.`,
-      "",
       MENTOR_BEHAVIOR_SPEC,
       "",
       mentorHardBounds(brief),
@@ -656,92 +665,69 @@ export function buildMentorPrompt({ brief, learnerText, locale = "ru", repair = 
     user: JSON.stringify(
       {
         locale,
+        learner_address_form: brief.learnerAddressForm || LEARNER_ADDRESS_FORM.NEUTRAL,
         learner_message: learnerText,
         // A rejected reply comes back here with the reason, once. See runMentorAgent.
         ...(repair ? { repair_request: repair } : {}),
-        brief: {
+        revealed_facts: brief.revealedFacts || [],
+        approved_clinical_teaching_rules: (brief.approvedTeachingRules || []).map((rule) => ({
+          rule_id: rule.rule_id,
+          status: rule.review_status,
+          teaching_point: rule.claim,
+          allowed_to_state: true,
+          source_ids: rule.source_ids,
+        })),
+        approved_dosing_rules: (brief.approvedDosingRules || []).map((rule) => ({
+          rule_id: rule.rule_id,
+          agent: rule.agent,
+          indication: rule.indication,
+          dose: rule.dose,
+          route: rule.route,
+          timing: rule.timing,
+          adjustments: rule.adjustments || [],
+          source_ids: rule.source_ids,
+        })),
+        candidate_issues: (brief.candidateIssues || []).map((issue) => ({
+          issue_id: issue.issue_id,
+          type: issue.type,
+          severity: issue.severity,
+          hint_level: issue.hint_level,
+          lifecycle: issue.lifecycle || null,
+          standing_risk_stage: issue.standing_risk_stage || null,
+          why_now: issue.why_now,
+          reasoning_gap: issue.reasoning_gap,
+          safety_critical: issue.safety_critical,
+          relevant_to_current_turn: issue.relevant_to_current_turn,
+          parameter_safety: issue.parameter_safety,
+          clinical_rule_ids: issue.clinical_rule_ids || [],
+          expected_answer_domains: issue.expected_answer_domains || [],
+          fallback_text: issue.fallback_text || null,
+        })),
+        recent_dialogue: (brief.recentDialogue || []).slice(-6),
+        safety_flags: brief.safetyFlags || [],
+        deterministic_policy_shadow: {
           turn_number: brief.turnNumber,
           phase: brief.phase,
           path_state: brief.pathState,
-          learner_address_form: brief.learnerAddressForm || LEARNER_ADDRESS_FORM.NEUTRAL,
-          // The whole session, not the last six lines. Closing a prerequisite
-          // with what the learner already said requires having read it.
-          transcript: brief.transcript || brief.recentDialogue || [],
-          recent_dialogue: brief.recentDialogue,
-          case_card: brief.caseCard || null,
-          // Verbatim. What the learner is reading immediately above your reply.
           engine_reply_this_turn: brief.engineReplyText || "",
-          // Action names only - never their results. Tells the mentor what the
-          // deterministic layer has already answered above its reply.
           just_performed: brief.justPerformed || [],
           results_already_delivered: Boolean(brief.resultsAlreadyDelivered),
           unrecognized_fragments: brief.unrecognizedFragments || [],
-          learner_reasoning: brief.learnerReasoning || null,
-          reasoning_delta_this_turn: brief.reasoningDeltaThisTurn,
-          accumulated_reasoning_state: brief.accumulatedReasoningState,
+          legacy_practices_named: brief.legacyPracticesNamed || [],
           previous_mentor_intervention: brief.previousMentorIntervention,
           previous_mentor_question_contract: brief.previousMentorQuestionContract,
           unanswered_question_turns: brief.unansweredQuestionTurns || 0,
-          // Your own last questions, verbatim. Asking any of them again in new
-          // words is refused - see hard bound 8.
           your_recent_questions: brief.recentMentorQuestions || [],
-          // Turns running you have been probing without the learner answering.
           probing_streak: brief.probingStreak || 0,
-          // Advisory. The deterministic policy's own answer, for you to
-          // disagree with when the case says otherwise. Not an instruction.
-          deterministic_policy_shadow: brief.mentorPolicy,
-          safety_flags: brief.safetyFlags,
+          mentor_policy: brief.mentorPolicy,
           simulator_produced_results: brief.simulatorProducedResults,
-          facts_contract: brief.factsContract,
-          revealed_facts: brief.revealedFacts || [],
-          allowed_numbers: [...allowedNumbers(brief)],
-          approved_clinical_teaching_rules: (brief.approvedTeachingRules || []).map((rule) => ({
-            rule_id: rule.rule_id,
-            status: rule.review_status,
-            teaching_point: rule.claim,
-            allowed_to_state: true,
-            factual_claim_source_id: `clinical_rule.${rule.rule_id}`,
-            source_ids: rule.source_ids,
-          })),
-          approved_dosing_rules: (brief.approvedDosingRules || []).map((rule) => ({
-            rule_id: rule.rule_id,
-            agent: rule.agent,
-            indication: rule.indication,
-            dose: rule.dose,
-            route: rule.route,
-            timing: rule.timing,
-            adjustments: rule.adjustments || [],
-            factual_claim_source_id: `dosing_rule.${rule.rule_id}`,
-            source_ids: rule.source_ids,
-          })),
-          // Named but unapproved practices the learner used. No teaching text is
-          // supplied until a reviewer signs one; say nothing clinical about them.
-          legacy_practices_named: brief.legacyPracticesNamed || [],
-          candidate_issues: (brief.candidateIssues || []).map((issue) => ({
-            issue_id: issue.issue_id,
-            type: issue.type,
-            severity: issue.severity,
-            hint_level: issue.hint_level,
-            lifecycle: issue.lifecycle || null,
-            standing_risk_stage: issue.standing_risk_stage || null,
-            why_now: issue.why_now,
-            reasoning_gap: issue.reasoning_gap,
-            safety_critical: issue.safety_critical,
-            relevant_to_current_turn: issue.relevant_to_current_turn,
-            parameter_safety: issue.parameter_safety,
-            clinical_rule_ids: issue.clinical_rule_ids || [],
-            fallback_text: issue.fallback_text || null,
-          })),
         },
         output_schema: {
           mode: MENTOR_MODES.join(" | "),
-          issue_id: "one candidate issue_id, or null only for CONTINUE",
+          issue_id: "one candidate issue_id, or null for CONTINUE, SAFETY_STOP, or when no candidate fits",
           mentor_text: "string",
           anchor_quote:
             "REINFORCE only and required there: a short verbatim fragment of the learner's message this turn. null otherwise.",
-          factual_claims: [{ source_id: "string", text: "excerpt of what you asserted" }],
-          question_domain: "what kind of answer your question expects | null",
-          scaffolding_level: "0-4",
         },
       },
       null,
@@ -782,10 +768,17 @@ function expectationsForIssue(issue) {
 
 function pendingQuestionFor({ mode, issue, policy, turnNumber, questionDomain = null }) {
   if (![MENTOR_MODE.CLARIFY, MENTOR_MODE.CHALLENGE, MENTOR_MODE.TEACH, MENTOR_MODE.SAFETY_STOP].includes(mode)) return null;
-  const expects = policy?.expected_answer_domains?.length
-    ? policy.expected_answer_domains
-    : expectationsForIssue(issue).length
-      ? expectationsForIssue(issue)
+  const issueExpectations = expectationsForIssue(issue);
+  // A reply that named no issue is not a reply about the policy's issue. When
+  // the policy holds one and the mentor declined it, its expected domains
+  // belong to a question that was not asked (see selectedIssue above).
+  const policyMatchesIssue = policy?.issue_id
+    ? issue?.issue_id === policy.issue_id
+    : true;
+  const expects = issueExpectations.length
+    ? issueExpectations
+    : policyMatchesIssue && policy?.expected_answer_domains?.length
+      ? policy.expected_answer_domains
       : questionDomain
         ? [questionDomain]
         : [];
@@ -795,7 +788,8 @@ function pendingQuestionFor({ mode, issue, policy, turnNumber, questionDomain = 
     expects,
     expected_answer_domains: expects,
     asked_turn: turnNumber,
-    scaffolding_level: policy?.scaffolding_level || 0,
+    scaffolding_level:
+      policyMatchesIssue ? policy?.scaffolding_level || issue?.hint_level || 0 : issue?.hint_level || 0,
     safety_critical: Boolean(policy?.safety_critical),
     governance_stop: Boolean(policy?.governance_stop),
   };
@@ -813,7 +807,7 @@ const REPAIR_EXPLANATIONS = Object.freeze({
   gendered_address_wrong_form:
     "род в реплике не совпадает с заявленной формой обращения резидента",
   unsourced_rule_citation:
-    "реплика ссылается на утверждённое правило или рекомендацию, но не объявляет его в factual_claims с допустимым source_id. Либо сошлись на реальное правило из approved_clinical_teaching_rules, либо убери ссылку на авторитет и скажи это от себя как вопрос",
+    "реплика ссылается на утверждённое правило или рекомендацию, но не цитирует правило, прикреплённое к выбранному issue. Используй точный текст approved rule либо убери ссылку на авторитет и задай вопрос о рассуждении",
   rule_claim_not_quoted:
     "объявленная цитата из клинического правила не встречается в реплике дословно — правило нельзя пересказывать своими словами, это подпись рецензента под чужим текстом",
   fact_source_not_allowed:
@@ -857,6 +851,17 @@ function repairRequest(validation) {
   };
 }
 
+const CLINICAL_REPAIR_REASONS = new Set([
+  "finding_leak",
+  "premature_diagnosis_confirmation",
+  "uncited_numeric_fact",
+  "fact_source_not_allowed",
+  "rule_claim_not_quoted",
+  "unsourced_rule_citation",
+  "unsupported_clinical_recommendation",
+  "safety_interrupt_required",
+]);
+
 /**
  * @returns {Promise<{text: string, source: "llm"|"deterministic", rejectionReason: string|null}>}
  */
@@ -899,37 +904,6 @@ export async function runMentorAgent({ brief, learnerText, caseData, revealedFin
         : [],
   };
 
-  /**
-   * What speaks when the model's reply cannot be used.
-   *
-   * Until 21.08.2026 this was the authored template, and the template is the
-   * wooden voice by construction - a rejected reply was replaced by the exact
-   * register the whole rewrite exists to get rid of. A senior surgeon who has
-   * nothing usable to say says nothing, so the mentor now falls silent and the
-   * engine's own closing prompt carries the turn.
-   *
-   * The one exception is a safety stop. Silence there would drop a warning the
-   * deterministic layer has already decided is owed, so the template speaks.
-   */
-  const silent = {
-    ...deterministic,
-    text: "",
-    mode: MENTOR_MODE.CONTINUE,
-    issueId: null,
-    // Its own source, not "deterministic". The A/B harness fails a run whose
-    // template share is too high, and a mentor that said NOTHING is not a
-    // mentor reciting a template - counting it as one hid a real transport
-    // failure behind a metric that looked like a quality failure.
-    source: "silent",
-    pendingQuestion: null,
-    firedHeuristicKeys: [],
-  };
-  const standingGateFallback = policyIssue?.standing_risk_stage === "irreversible_gate";
-  const unusableReply =
-    fallbackMode === MENTOR_MODE.SAFETY_STOP || standingGateFallback
-      ? deterministic
-      : silent;
-
   if (!options.llm) return deterministic;
 
   const locale = options.locale || brief.locale;
@@ -937,8 +911,10 @@ export async function runMentorAgent({ brief, learnerText, caseData, revealedFin
   const telemetry = [];
   let repair = null;
 
-  // Rule 5: a rejection buys one repair, not an immediate retreat to the
-  // template. The authored text is the last resort, not the first answer.
+  // v4.1: repair is reserved for clinical-boundary violations. Structural
+  // errors such as a missing anchor or an unknown issue_id use the reviewed
+  // deterministic candidate text immediately; a malformed reply must not make
+  // the mentor silently disappear.
   for (let attempt = 0; attempt < 2; attempt += 1) {
     let parsed;
     try {
@@ -949,7 +925,7 @@ export async function runMentorAgent({ brief, learnerText, caseData, revealedFin
       const detail = String(error?.message || "").slice(0, 200);
       rejectionReasons.push(detail ? `mentor_agent_error: ${detail}` : "mentor_agent_error");
       return {
-        ...unusableReply,
+        ...deterministic,
         rejectionReason: rejectionReasons[0],
         rejectionReasons,
         repairAttempted: attempt > 0,
@@ -962,20 +938,33 @@ export async function runMentorAgent({ brief, learnerText, caseData, revealedFin
     telemetry.push(...(validation.telemetry || []));
     if (!validation.ok) {
       rejectionReasons.push(validation.reason);
+      if (attempt > 0 || !CLINICAL_REPAIR_REASONS.has(validation.reason)) {
+        return {
+          ...deterministic,
+          rejectionReason: validation.reason,
+          rejectionReasons,
+          repairAttempted: attempt > 0,
+          telemetry,
+        };
+      }
       repair = repairRequest(validation);
       continue;
     }
 
+    // The issue the MODEL chose, and nothing else.
+    //
+    // v4.1 lets a speaking reply carry issue_id: null - the model may teach
+    // something no candidate names. What it may not do is have that turn
+    // recorded against the deterministic policy's issue: firedHeuristicKeys
+    // would close a heuristic the mentor never touched, and the next turn would
+    // grade the learner's answer against the domains of a question nobody
+    // asked. A turn with no issue is attributed to no issue.
     const selectedIssue =
-      (brief.candidateIssues || []).find((issue) => issue.issue_id === parsed.issue_id) ||
-      fallbackIssue;
+      (brief.candidateIssues || []).find((issue) => issue.issue_id === parsed.issue_id) || null;
     return {
       text: String(parsed.mentor_text || "").trim(),
       mode: parsed.mode,
-      issueId:
-        parsed.mode === MENTOR_MODE.CONTINUE
-          ? parsed.issue_id || null
-          : parsed.issue_id || policy.issue_id || null,
+      issueId: parsed.issue_id || null,
       source: "llm",
       // Null: this reply passed. What it was repaired FROM is in
       // rejectionReasons, which is what the before/after table reads.
@@ -983,7 +972,13 @@ export async function runMentorAgent({ brief, learnerText, caseData, revealedFin
       rejectionReasons,
       repairAttempted: attempt > 0,
       telemetry,
-      scaffoldingLevel: Number(parsed.scaffolding_level || policy.scaffolding_level || 0),
+      scaffoldingLevel: Number(
+        parsed.scaffolding_level ||
+          (selectedIssue?.issue_id === policy.issue_id
+            ? policy.scaffolding_level
+            : selectedIssue?.hint_level) ||
+          0
+      ),
       moveTypes: brief.moves.map((move) => move.type),
       pendingQuestion: pendingQuestionFor({
         mode: parsed.mode,
@@ -1000,7 +995,7 @@ export async function runMentorAgent({ brief, learnerText, caseData, revealedFin
   }
 
   return {
-    ...unusableReply,
+    ...deterministic,
     rejectionReason: rejectionReasons[rejectionReasons.length - 1] || null,
     rejectionReasons,
     repairAttempted: true,
